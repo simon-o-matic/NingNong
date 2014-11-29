@@ -1,6 +1,4 @@
-README
-
-Todo
+* Todo
 
 - pass through command line options to ping (captuing the time on the way thru)
 - track averages on a 1m/10m/60m basis

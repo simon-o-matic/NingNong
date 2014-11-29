@@ -23,20 +23,39 @@
 //		strings to stderr. In this case there is also a return character (\n) on the 
 //		end which needs to be removed.
 //
+//
+//  UPDATE.
+//
+//  I have determined that all these shenanigans is a actually a bug in the OS X
+// 	implementation of ping. Hence, I've now included a patched version of ping.c
+// 	that does flush the timeout message. This greatly simplifies the code now, however
+//  I've left it to support both models.
+
 'use strict';
 
 var spawn 	= require('child_process').spawn;
 var events 	= require('events');
 var util 	= require('util');
 
-var GRACE_PERIOD = 1.5; 	// seconds to wait over and above before we assume ther is a timeout
+var USE_GOOD_PING	= false;		// change to false if you are using the broken OS X ping
+var PING_COMMAND 	= "./ping"; // "/sbin/ping"
+var PING_URL		= "google.com";
+
+var PAUSE_TIME		= 1;		// parameter for ping. Should be read from config.
+
+// For the broken ping
+var TIMEOUT_GRACE_PERIOD 	= 2; // seconds to wait over and above before we assume ther is a timeout
+var waiter;				 // the thread that waits for things
+
+// some counters
+var timeouts 		= 1;
+var pings 			= 1;
+var noRoutes 		= 1;
 
 kickItAllOff();
 
 function kickItAllOff() {
-	var pauseTime = 1; //second
-
-	var child = spawn('ping', ['-i ' + pauseTime, 'google.com']);
+	var child = spawn('./ping', ['-i ' + PAUSE_TIME, PING_URL]);
 
 	child.stdout.on('data', processPing);
 	child.stderr.on('data', processErrorPing);
@@ -44,13 +63,9 @@ function kickItAllOff() {
 	    console.log('Ping stopped: ' + code);
 	});
 
-	waitForNoPing(pauseTime);
+	// set up initial wait for timeouts
+	waitForNoPing();
 }
-
-// some counters
-var timeouts = 1;
-var pings = 1;
-var noRoutes = 1;
 
 function processTimeout(ping) {
 	if (timeouts == 1) { util.print("\n") }
@@ -60,17 +75,29 @@ function processTimeout(ping) {
 }
 
 function processPing(ping) {
-	var duration = /time=([\S]+)/.exec(ping);
-
-	if (duration === null) { 		
-		console.log("NO TIMEOUT! There always is... not sure whats going on: " + ping);
+	if (/bytes/.test(ping)) {		
+		processGoodPing(ping);
+	} else if (/timeout/.test(ping)) { 		
+		processTimeout(ping);
 	} else {
-		if (pings == 1) util.print("\n");
-		util.print(">GOOD [" + (pings++) + "] " + duration[1] + "\r");
-		timeouts = 1;
-		noRoutes = 1;
-
+		console.log("No idea what message this is: " + ping);
 	}
+}
+
+function processGoodPing(ping) {
+	var duration = /time=([\S]+)/.exec(ping);
+	if (!duration) {
+		console.log("No time in the ping??? " + ping);
+		return;
+	}
+
+	if (pings == 1) util.print("\n");
+	util.print(">GOOD [" + (pings++) + "] " + duration[1] + "\r");
+	timeouts = 1;
+	noRoutes = 1;
+
+	// stop any existing and start a new ping wait timer
+	waitForNoPing();
 }
 
 // Ping throws an error when there is no route to the host, ie., your connection is 
@@ -89,11 +116,24 @@ function processErrorPing(ePing) {
 	util.print(">NO ROUTE [" + (noRoutes++) + "] " + ePing + "\r");
 	timeouts = 1;
 	pings = 1;
+
+	// stop any existing and start a new ping wait timer
+	waitForNoPing();
 }
 
-function waitForNoPing(time) {
-	setInterval(function() {
-		// Its only a timeout if we can contact the server
-		if (noRoutes < 2) processTimeout();
-	}, (time + GRACE_PERIOD) * 1000);
+// The fake timeout function that starts a thread after another message and acts
+// like the timeout for the bad ping program.
+function waitForNoPing() {
+	// Don't wait for the timeout if our ping reports it fine
+	if (USE_GOOD_PING) return;
+
+	//console.log("setting up a new waiter")
+	clearTimeout(waiter);
+	waiter = setTimeout(function() {
+		// If we get there, then we didn't hear back from the pinger. So lets now launch a
+		// a new interval timer for
+		waiter = setInterval(function() {
+			processTimeout();
+		}, PAUSE_TIME * 1000)
+	}, (PAUSE_TIME + TIMEOUT_GRACE_PERIOD) * 1000);
 }
