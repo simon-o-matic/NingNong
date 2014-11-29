@@ -6,3 +6,4 @@
 - launch web browser to visualize stats
 - cancel the first timeout if it actually wasnt (count the number that arrive with the next good ping)
 x re-write the timeout code. Need to keep it in sync with ping output
+- ping multiple sites at the same time
